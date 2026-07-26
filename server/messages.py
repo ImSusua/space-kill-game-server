@@ -433,13 +433,14 @@ def encode_scene_add_del_player(players_added, players_removed):
     return w.get_bytes()
 
 
-def encode_scene_update_player(player_id, x, y, z, state=0):
-    """UpdatePlayer message"""
+def encode_scene_update_player(player_id, x, y, z=0.0, state=0):
+    """UpdatePlayer message with MsgVector position.
+    Fields: PlayerId(1,uint64), Pos(2,MsgVector), Rotation(3,MsgVector), State(5,uint32)
+    """
     w = PBWriter()
     w.write_varint_field(1, player_id)
-    w.write_varint_field(2, int(x * 1000))
-    w.write_varint_field(3, int(y * 1000))
-    w.write_varint_field(4, int(z * 1000))
+    pos_data = encode_msg_vector(x, y)
+    w.write_message_field(2, pos_data)
     w.write_varint_field(5, state)
     return w.get_bytes()
 
@@ -472,3 +473,158 @@ def encode_scene_error_msg(error_code=0, msg=""):
 def encode_scene_room_close():
     """RoomClose"""
     return b''
+
+
+def encode_scene_space_kill(killer_id, victim_id):
+    """SpaceKill notice: KillerId(1,uint64), VictimId(2,uint64)"""
+    w = PBWriter()
+    w.write_varint_field(1, killer_id)
+    w.write_varint_field(2, victim_id)
+    return w.get_bytes()
+
+
+def encode_scene_space_report(reporter_id, victim_id):
+    """SpaceReport notice: ReporterId(1,uint64), VictimId(2,uint64)"""
+    w = PBWriter()
+    w.write_varint_field(1, reporter_id)
+    w.write_varint_field(2, victim_id)
+    return w.get_bytes()
+
+
+def encode_scene_space_vote_end(voted_out_id=0):
+    """SpaceVoteEnd: VotedOutId(1,uint64)"""
+    w = PBWriter()
+    w.write_varint_field(1, voted_out_id)
+    return w.get_bytes()
+
+
+def encode_scene_space_stage(stage=0):
+    """SpaceStage: Stage(1,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, stage)
+    return w.get_bytes()
+
+
+def encode_scene_notice_identity(player_id, identity=0):
+    """NoticeIdentity: PlayerId(1,uint64), Identity(2,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    w.write_varint_field(2, identity)
+    return w.get_bytes()
+
+
+def encode_scene_update_killer_cooldowns(killer_id=0, cooldown=0):
+    """UpdateKillerCooldowns: KillerId(1,uint64), Cooldown(2,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, killer_id)
+    w.write_varint_field(2, cooldown)
+    return w.get_bytes()
+
+
+def encode_scene_update_clear_body(player_id=0):
+    """UpdateClearBody: PlayerId(1,uint64)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    return w.get_bytes()
+
+
+def encode_scene_device_start_cd(device_id=0, cd=0):
+    """DeviceStartCD: DeviceId(1,uint32), CD(2,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, device_id)
+    w.write_varint_field(2, cd)
+    return w.get_bytes()
+
+
+def encode_scene_add_mission(mission_id=0, desc=""):
+    """AddMission: MissionId(1,uint32), Desc(2,string)"""
+    w = PBWriter()
+    w.write_varint_field(1, mission_id)
+    w.write_string_field(2, desc)
+    return w.get_bytes()
+
+
+def encode_scene_mission_total_process(total=0, finished=0):
+    """MissionTotalProcess: Total(1,uint32), Finished(2,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, total)
+    w.write_varint_field(2, finished)
+    return w.get_bytes()
+
+
+def encode_scene_refresh_custom_setting(player_id=0, settings=b''):
+    """RefreshCustomSetting: PlayerId(1,uint64), Settings(2,bytes)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    w.write_bytes_field(2, settings)
+    return w.get_bytes()
+
+
+def encode_scene_speaker_notice(player_id=0, content=""):
+    """SpeakerNotice: PlayerId(1,uint64), Content(2,string)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    w.write_string_field(2, content)
+    return w.get_bytes()
+
+
+def encode_scene_voice_info(player_id=0, speaking=False):
+    """VoiceInfo: PlayerId(1,uint64), Speaking(2,bool)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    w.write_bool_field(2, speaking)
+    return w.get_bytes()
+
+
+def encode_scene_barrage(player_id=0, content=""):
+    """Barrage: PlayerId(1,uint64), Content(2,string)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    w.write_string_field(2, content)
+    return w.get_bytes()
+
+
+def encode_scene_add_like(player_id=0, like_num=0):
+    """RetAddLike: PlayerId(1,uint64), LikeNum(2,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, player_id)
+    w.write_varint_field(2, like_num)
+    return w.get_bytes()
+
+
+def encode_scene_update_scene_objs(objs_data=b''):
+    """UpdateSceneObjs: Objs(1,bytes)"""
+    w = PBWriter()
+    w.write_bytes_field(1, objs_data)
+    return w.get_bytes()
+
+
+def encode_scene_refresh_scene(scene_id=1, map_id=1):
+    """RefreshScene: SceneId(1,uint32), MapId(2,uint32)"""
+    w = PBWriter()
+    w.write_varint_field(1, scene_id)
+    w.write_varint_field(2, map_id)
+    return w.get_bytes()
+
+
+def encode_scene_room_setting(settings_data=b''):
+    """RoomSetting: Settings(1,bytes)"""
+    w = PBWriter()
+    w.write_bytes_field(1, settings_data)
+    return w.get_bytes()
+
+
+def encode_scene_watch_login_ok(ok=True, watcher_id=0):
+    """WatchLogin response: Ok(1,bool), WatcherId(2,uint64)"""
+    w = PBWriter()
+    w.write_bool_field(1, ok)
+    w.write_varint_field(2, watcher_id)
+    return w.get_bytes()
+
+
+def encode_scene_watch_notice(action=0, player_id=0):
+    """WatchNotice: Action(1,uint32), PlayerId(2,uint64)"""
+    w = PBWriter()
+    w.write_varint_field(1, action)
+    w.write_varint_field(2, player_id)
+    return w.get_bytes()

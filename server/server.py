@@ -31,6 +31,12 @@ scene_rooms = {}
 # Scene player positions
 scene_players = {}
 
+# Thread safety locks
+players_lock = threading.Lock()
+gate_sessions_lock = threading.Lock()
+scene_rooms_lock = threading.Lock()
+scene_players_lock = threading.Lock()
+
 
 def generate_player_id():
     global player_id_counter
@@ -52,39 +58,40 @@ def get_or_create_player(device_id, account="", password=""):
     """Get or create a player by device ID or account."""
     global player_id_counter
 
-    # Try to find by account
-    if account and account in players:
-        return players[account]
+    with players_lock:
+        # Try to find by account
+        if account and account in players:
+            return players[account]
 
-    # Try to find by device
-    for p in players.values():
-        if p.get('device') == device_id:
-            return p
+        # Try to find by device
+        for p in players.values():
+            if p.get('device') == device_id:
+                return p
 
-    # Create new player
-    pid = generate_player_id()
-    if not account:
-        account = f"Player_{pid}"
+        # Create new player
+        pid = generate_player_id()
+        if not account:
+            account = f"Player_{pid}"
 
-    player = {
-        'id': pid,
-        'account': account,
-        'password': password,
-        'device': device_id,
-        'name': account,
-        'gate_key': '',
-        'scene_key': '',
-        'color_id': 1,
-        'clothes': [],
-        'level': 1,
-        'cup_num': 0,
-        'cookie': 10000,
-        'donut': 100,
-        'pai': 100,
-        'space_num': 1,
-    }
-    players[account] = player
-    return player
+        player = {
+            'id': pid,
+            'account': account,
+            'password': password,
+            'device': device_id,
+            'name': account,
+            'gate_key': '',
+            'scene_key': '',
+            'color_id': 1,
+            'clothes': [],
+            'level': 1,
+            'cup_num': 0,
+            'cookie': 10000,
+            'donut': 100,
+            'pai': 100,
+            'space_num': 1,
+        }
+        players[account] = player
+        return player
 
 
 # ==================== HTTP Login Server ====================
@@ -304,7 +311,8 @@ class LoginHandler(BaseHTTPRequestHandler):
         player = get_or_create_player(device, account, password)
         gate_key = generate_gate_key(player['id'])
         player['gate_key'] = gate_key
-        gate_sessions[gate_key] = player
+        with gate_sessions_lock:
+            gate_sessions[gate_key] = player
 
         print(f"[HTTP] Login OK: pid={player['id']} account={player['account']}")
 
@@ -354,12 +362,17 @@ class LoginHandler(BaseHTTPRequestHandler):
 
         # Create a scene room
         room_id_new = len(scene_rooms) + 1
-        scene_rooms[room_id_new] = {
-            'id': room_id_new,
-            'players': {},
-            'scene_key': scene_key,
-            'player_keys': {scene_key: player['id']},
-        }
+        with scene_rooms_lock:
+            scene_rooms[room_id_new] = {
+                'id': room_id_new,
+                'players': {},
+                'scene_key': scene_key,
+                'player_keys': {scene_key: player['id']},
+                'game_state': 'waiting',
+                'dead_players': set(),
+                'votes': {},
+                'identities': {},
+            }
 
         print(f"[HTTP] StartGame OK: uid={uid} room_addr={SCENE_ADDR}")
 
@@ -786,7 +799,8 @@ def handle_gate_login(client, sid, pb_data):
         print(f"[Gate] Login parse error: {e}")
 
     # Find player by gate key
-    player = gate_sessions.get(gate_key)
+    with gate_sessions_lock:
+        player = gate_sessions.get(gate_key)
     if player:
         client.player_id = player['id']
         client.player = player
@@ -922,22 +936,38 @@ def handle_scene_client(client):
     finally:
         print(f"[Scene] Client disconnected: {client.addr}")
         # Remove from room
-        if client.room_id and client.room_id in scene_rooms:
-            room = scene_rooms[client.room_id]
-            if client.player_id in room['players']:
-                del room['players'][client.player_id]
-                # Notify other players
-                for pid, other_client in room['players'].items():
-                    if other_client != client:
-                        try:
-                            other_client.send_scene_message(ModuleType.Scene, SceneCmd.AddDelPlayer,
-                                msg.encode_scene_add_del_player([], [{'id': client.player_id}]))
-                        except:
-                            pass
+        with scene_rooms_lock:
+            if client.room_id and client.room_id in scene_rooms:
+                room = scene_rooms[client.room_id]
+                if client.player_id in room['players']:
+                    del room['players'][client.player_id]
+                    # Notify other players
+                    for pid, other_client in room['players'].items():
+                        if other_client != client:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.AddDelPlayer,
+                                    msg.encode_scene_add_del_player([], [{'id': client.player_id}]))
+                            except:
+                                pass
         try:
             client.conn.close()
         except:
             pass
+
+
+def broadcast_to_room(client, cmd, pb_data, include_self=False):
+    """Broadcast a message to all players in the client's room."""
+    try:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            for pid, other_client in room['players'].items():
+                if include_self or pid != client.player_id:
+                    try:
+                        other_client.send_scene_message(ModuleType.Scene, cmd, pb_data)
+                    except:
+                        pass
+    except Exception as e:
+        print(f"[Scene] Broadcast error (cmd={cmd}): {e}")
 
 
 def handle_scene_message(client, module, cmd, pb_data):
@@ -952,145 +982,143 @@ def handle_scene_message(client, module, cmd, pb_data):
         elif cmd == SceneCmd.BatchMove:
             handle_scene_batch_move(client, pb_data)
         elif cmd == SceneCmd.Action:
-            # Action - no response needed, just broadcast if needed
-            pass
+            # Action - broadcast to room
+            broadcast_to_room(client, SceneCmd.Action, pb_data)
         elif cmd == SceneCmd.ChangeState:
             handle_scene_change_state(client, pb_data)
         elif cmd == SceneCmd.Operate:
-            # Operate - send empty response
+            # Operate - broadcast to room and send ack
+            broadcast_to_room(client, SceneCmd.Operate, pb_data)
             client.send_scene_message(module, SceneCmd.Operate, b'')
         elif cmd == SceneCmd.GameOprate:
-            # GameOprate - send empty response
+            # GameOprate - broadcast to room and send ack
+            broadcast_to_room(client, SceneCmd.GameOprate, pb_data)
             client.send_scene_message(module, SceneCmd.GameOprate, b'')
+        elif cmd == SceneCmd.OwnerOprate:
+            # OwnerOprate - broadcast to room
+            broadcast_to_room(client, SceneCmd.OwnerOprate, pb_data)
         elif cmd == SceneCmd.GetRoomSetting:
-            # Return empty room setting
-            client.send_scene_message(module, SceneCmd.RoomSetting, b'')
+            # Return room setting
+            client.send_scene_message(module, SceneCmd.RoomSetting, msg.encode_scene_room_setting())
         elif cmd == SceneCmd.RoomChat:
             handle_scene_chat(client, pb_data)
         elif cmd == SceneCmd.SendEmoji:
-            # Broadcast emoji to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.SendEmoji, pb_data)
-                            except:
-                                pass
-            except:
-                pass
+            broadcast_to_room(client, SceneCmd.SendEmoji, pb_data)
         elif cmd == SceneCmd.Trigger:
-            # Broadcast trigger to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.Trigger, pb_data)
-                            except:
-                                pass
-            except:
-                pass
+            broadcast_to_room(client, SceneCmd.Trigger, pb_data)
+        elif cmd == SceneCmd.BatchTrigger:
+            broadcast_to_room(client, SceneCmd.BatchTrigger, pb_data)
         elif cmd == SceneCmd.ChangeColor:
             handle_scene_change_color(client, pb_data)
+        elif cmd == SceneCmd.SyncAction:
+            broadcast_to_room(client, SceneCmd.SyncAction, pb_data)
+        elif cmd == SceneCmd.SyncMove:
+            broadcast_to_room(client, SceneCmd.SyncMove, pb_data)
+        elif cmd == SceneCmd.MoveObject:
+            broadcast_to_room(client, SceneCmd.MoveObject, pb_data)
+        elif cmd == SceneCmd.SpaceStart:
+            # Game start - update room state and broadcast
+            with scene_rooms_lock:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    room['game_state'] = 'playing'
+                    room['dead_players'] = set()
+                    room['votes'] = {}
+            broadcast_to_room(client, SceneCmd.SpaceStart, pb_data, include_self=True)
+        elif cmd == SceneCmd.SpaceEnd:
+            # Game end - update room state and broadcast
+            with scene_rooms_lock:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    room['game_state'] = 'waiting'
+                    room['dead_players'] = set()
+                    room['votes'] = {}
+            broadcast_to_room(client, SceneCmd.SpaceEnd, pb_data, include_self=True)
+        elif cmd == SceneCmd.SpaceKill:
+            handle_scene_space_kill(client, pb_data)
+        elif cmd == SceneCmd.SpaceReport:
+            handle_scene_space_report(client, pb_data)
+        elif cmd == SceneCmd.SpaceVote:
+            handle_scene_space_vote(client, pb_data)
+        elif cmd == SceneCmd.SpaceEnterVent:
+            broadcast_to_room(client, SceneCmd.SpaceEnterVent, pb_data)
+        elif cmd == SceneCmd.SpaceClearBody:
+            handle_scene_space_clear_body(client, pb_data)
+        elif cmd == SceneCmd.SpaceSample:
+            broadcast_to_room(client, SceneCmd.SpaceSample, pb_data)
+        elif cmd == SceneCmd.SpaceMorph:
+            broadcast_to_room(client, SceneCmd.SpaceMorph, pb_data)
+        elif cmd == SceneCmd.SpaceUpdatePlayer:
+            broadcast_to_room(client, SceneCmd.SpaceUpdatePlayer, pb_data)
+        elif cmd == SceneCmd.SpaceChosePos:
+            broadcast_to_room(client, SceneCmd.SpaceChosePos, pb_data)
+        elif cmd == SceneCmd.SpaceChoseArea:
+            broadcast_to_room(client, SceneCmd.SpaceChoseArea, pb_data)
+        elif cmd == SceneCmd.SpaceCheckQuit:
+            broadcast_to_room(client, SceneCmd.SpaceCheckQuit, pb_data)
+        elif cmd == SceneCmd.ChoseIdentity:
+            handle_scene_chose_identity(client, pb_data)
+        elif cmd == SceneCmd.UseOccupationCard:
+            broadcast_to_room(client, SceneCmd.UseOccupationCard, pb_data)
+        elif cmd == SceneCmd.BreakDevice:
+            broadcast_to_room(client, SceneCmd.BreakDevice, pb_data)
+        elif cmd == SceneCmd.StartTinyGame:
+            broadcast_to_room(client, SceneCmd.StartTinyGame, pb_data)
+        elif cmd == SceneCmd.FinishTinyGame:
+            broadcast_to_room(client, SceneCmd.FinishTinyGame, pb_data)
+        elif cmd == SceneCmd.CancelTinyGame:
+            broadcast_to_room(client, SceneCmd.CancelTinyGame, pb_data)
+        elif cmd == SceneCmd.PlayTinyGame:
+            broadcast_to_room(client, SceneCmd.PlayTinyGame, pb_data)
+        elif cmd == SceneCmd.RemoteUrgent:
+            broadcast_to_room(client, SceneCmd.RemoteUrgent, pb_data)
+        elif cmd == SceneCmd.EndSpeak:
+            broadcast_to_room(client, SceneCmd.EndSpeak, pb_data)
+        elif cmd == SceneCmd.UGCStart:
+            broadcast_to_room(client, SceneCmd.UGCStart, pb_data)
+        elif cmd == SceneCmd.UGCEnd:
+            broadcast_to_room(client, SceneCmd.UGCEnd, pb_data)
+        elif cmd == SceneCmd.RoomBroadcast:
+            broadcast_to_room(client, SceneCmd.RoomBroadcast, pb_data)
+        elif cmd == SceneCmd.GiveGift:
+            broadcast_to_room(client, SceneCmd.GiveGift, pb_data)
+        elif cmd == SceneCmd.GameKick:
+            handle_scene_game_kick(client, pb_data)
+        elif cmd == SceneCmd.MuteSpeak:
+            broadcast_to_room(client, SceneCmd.MuteSpeak, pb_data)
+        elif cmd == SceneCmd.ModifyRoomName:
+            broadcast_to_room(client, SceneCmd.ModifyRoomName, pb_data, include_self=True)
+        elif cmd == SceneCmd.RefreshData:
+            broadcast_to_room(client, SceneCmd.RefreshData, pb_data)
+        elif cmd == SceneCmd.RoomAIAudio:
+            broadcast_to_room(client, SceneCmd.RoomAIAudio, pb_data)
+        elif cmd == SceneCmd.WatchLogin:
+            handle_scene_watch_login(client, pb_data)
+        elif cmd == SceneCmd.RefreshScene:
+            broadcast_to_room(client, SceneCmd.RefreshScene, pb_data, include_self=True)
+        elif cmd == SceneCmd.UpdateSceneObjs:
+            broadcast_to_room(client, SceneCmd.UpdateSceneObjs, pb_data)
+        elif cmd == SceneCmd.Barrage:
+            broadcast_to_room(client, SceneCmd.Barrage, pb_data)
+        elif cmd == SceneCmd.HideBarrage:
+            broadcast_to_room(client, SceneCmd.HideBarrage, pb_data)
+        elif cmd == SceneCmd.AddLike:
+            broadcast_to_room(client, SceneCmd.AddLike, pb_data)
+        elif cmd == SceneCmd.RoomDress:
+            broadcast_to_room(client, SceneCmd.RoomDress, pb_data)
+        elif cmd == SceneCmd.CustomSetting:
+            broadcast_to_room(client, SceneCmd.CustomSetting, pb_data)
+        elif cmd == SceneCmd.CustomChangeLabel:
+            broadcast_to_room(client, SceneCmd.CustomChangeLabel, pb_data)
+        elif cmd == SceneCmd.VoiceInfo:
+            broadcast_to_room(client, SceneCmd.VoiceInfo, pb_data)
         elif cmd == SceneCmd.ReportHangUp:
             pass
         elif cmd == SceneCmd.ReportSpeak:
             pass
-        elif cmd == SceneCmd.SyncAction:
-            # Broadcast sync action to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.SyncAction, pb_data)
-                            except:
-                                pass
-            except:
-                pass
-        elif cmd == SceneCmd.SyncMove:
-            # Broadcast sync move to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.SyncMove, pb_data)
-                            except:
-                                pass
-            except:
-                pass
-        elif cmd == SceneCmd.MoveObject:
-            # Broadcast move object to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.MoveObject, pb_data)
-                            except:
-                                pass
-            except:
-                pass
-        elif cmd == SceneCmd.SpaceStart:
-            # Game start - broadcast to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        try:
-                            other_client.send_scene_message(ModuleType.Scene, SceneCmd.SpaceStart, pb_data)
-                        except:
-                            pass
-            except:
-                pass
-        elif cmd == SceneCmd.SpaceEnd:
-            # Game end - broadcast to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        try:
-                            other_client.send_scene_message(ModuleType.Scene, SceneCmd.SpaceEnd, pb_data)
-                        except:
-                            pass
-            except:
-                pass
-        elif cmd == SceneCmd.RoomBroadcast:
-            # Broadcast to all players in room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.RoomBroadcast, pb_data)
-                            except:
-                                pass
-            except:
-                pass
-        elif cmd == SceneCmd.BatchTrigger:
-            # Broadcast batch trigger to room
-            try:
-                room = scene_rooms.get(client.room_id)
-                if room:
-                    for pid, other_client in room['players'].items():
-                        if pid != client.player_id:
-                            try:
-                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.BatchTrigger, pb_data)
-                            except:
-                                pass
-            except:
-                pass
         else:
             # Silently ignore unhandled commands
-            pass
+            print(f"[Scene] Unhandled cmd={cmd}, data_len={len(pb_data)}")
     except Exception as e:
         print(f"[Scene] Message handler error (cmd={cmd}): {e}")
 
@@ -1120,27 +1148,33 @@ def handle_scene_login(client, pb_data):
     client.player_name = name
 
     # Find player by scene key
-    for room in scene_rooms.values():
-        if key in room['player_keys']:
-            client.player_id = room['player_keys'][key]
-            client.room_id = room['id']
-            room['players'][client.player_id] = client
-            break
+    with scene_rooms_lock:
+        for room in scene_rooms.values():
+            if key in room['player_keys']:
+                client.player_id = room['player_keys'][key]
+                client.room_id = room['id']
+                room['players'][client.player_id] = client
+                break
 
-    if client.player_id == 0:
-        client.player_id = generate_player_id()
-        client.room_id = 1
-        if client.room_id not in scene_rooms:
-            scene_rooms[client.room_id] = {
-                'id': 1,
-                'players': {},
-                'scene_key': key,
-                'player_keys': {},
-            }
-        scene_rooms[client.room_id]['players'][client.player_id] = client
-        scene_rooms[client.room_id]['player_keys'][key] = client.player_id
+        if client.player_id == 0:
+            client.player_id = generate_player_id()
+            client.room_id = 1
+            if client.room_id not in scene_rooms:
+                scene_rooms[client.room_id] = {
+                    'id': 1,
+                    'players': {},
+                    'scene_key': key,
+                    'player_keys': {},
+                    'game_state': 'waiting',
+                    'dead_players': set(),
+                    'votes': {},
+                    'identities': {},
+                }
+            scene_rooms[client.room_id]['players'][client.player_id] = client
+            scene_rooms[client.room_id]['player_keys'][key] = client.player_id
 
-    scene_players[client.player_id] = client
+    with scene_players_lock:
+        scene_players[client.player_id] = client
 
     # Send login response
     ret_data = msg.encode_ret_scene_login(
@@ -1328,6 +1362,208 @@ def handle_scene_change_color(client, pb_data):
                         pass
     except:
         pass
+
+
+def handle_scene_space_kill(client, pb_data):
+    """Handle SpaceKill - killer eliminates a player.
+    ReqSpaceKill: KillerId(1,uint64), VictimId(2,uint64)
+    """
+    killer_id = client.player_id
+    victim_id = 0
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 0:
+                killer_id = reader.read_varint()
+            elif field_num == 2 and wire_type == 0:
+                victim_id = reader.read_varint()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Mark victim as dead
+    with scene_rooms_lock:
+        room = scene_rooms.get(client.room_id)
+        if room and victim_id:
+            room['dead_players'].add(victim_id)
+
+    # Broadcast kill notice to all players in room
+    kill_msg = msg.encode_scene_space_kill(killer_id, victim_id)
+    broadcast_to_room(client, SceneCmd.SpaceKill, kill_msg, include_self=True)
+    print(f"[Scene] SpaceKill: killer={killer_id} victim={victim_id}")
+
+
+def handle_scene_space_report(client, pb_data):
+    """Handle SpaceReport - report a dead body.
+    ReqSpaceReport: ReporterId(1,uint64), VictimId(2,uint64)
+    """
+    reporter_id = client.player_id
+    victim_id = 0
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 0:
+                reporter_id = reader.read_varint()
+            elif field_num == 2 and wire_type == 0:
+                victim_id = reader.read_varint()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Broadcast report to all players
+    report_msg = msg.encode_scene_space_report(reporter_id, victim_id)
+    broadcast_to_room(client, SceneCmd.SpaceReport, report_msg, include_self=True)
+    print(f"[Scene] SpaceReport: reporter={reporter_id} victim={victim_id}")
+
+
+def handle_scene_space_vote(client, pb_data):
+    """Handle SpaceVote - vote to kick a player.
+    ReqSpaceVote: TargetId(1,uint64)
+    """
+    target_id = 0
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 0:
+                target_id = reader.read_varint()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Record vote
+    with scene_rooms_lock:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            room['votes'][client.player_id] = target_id
+            # Broadcast vote to all players
+            vote_msg = pb_data  # Forward the original vote message
+            broadcast_to_room(client, SceneCmd.SpaceVote, vote_msg, include_self=True)
+
+            # Check if majority reached (simple: if more than half voted same target)
+            vote_count = {}
+            for voter, target in room['votes'].items():
+                vote_count[target] = vote_count.get(target, 0) + 1
+            total_players = len(room['players'])
+            for target, count in vote_count.items():
+                if count > total_players // 2 and target > 0:
+                    # Majority vote - kick player
+                    vote_end_msg = msg.encode_scene_space_vote_end(target)
+                    for pid, other_client in room['players'].items():
+                        try:
+                            other_client.send_scene_message(ModuleType.Scene, SceneCmd.SpaceVoteEnd, vote_end_msg)
+                        except:
+                            pass
+                    room['votes'] = {}
+                    print(f"[Scene] Vote passed: target={target} votes={count}")
+                    break
+    print(f"[Scene] SpaceVote: voter={client.player_id} target={target_id}")
+
+
+def handle_scene_space_clear_body(client, pb_data):
+    """Handle SpaceClearBody - clear a dead body."""
+    victim_id = 0
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 0:
+                victim_id = reader.read_varint()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Remove from dead players set
+    with scene_rooms_lock:
+        room = scene_rooms.get(client.room_id)
+        if room and victim_id:
+            room['dead_players'].discard(victim_id)
+
+    # Broadcast clear body to all players
+    clear_msg = msg.encode_scene_update_clear_body(victim_id)
+    broadcast_to_room(client, SceneCmd.UpdateClearBody, clear_msg, include_self=True)
+    print(f"[Scene] SpaceClearBody: clearer={client.player_id} victim={victim_id}")
+
+
+def handle_scene_chose_identity(client, pb_data):
+    """Handle ChoseIdentity - player chooses their identity.
+    ReqChoseIdentity: Identity(1,uint32)
+    """
+    identity = 0
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 0:
+                identity = reader.read_varint()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Store identity
+    with scene_rooms_lock:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            room['identities'][client.player_id] = identity
+
+    # Send NoticeIdentity to the player only (identity is private)
+    notice_msg = msg.encode_scene_notice_identity(client.player_id, identity)
+    client.send_scene_message(ModuleType.Scene, SceneCmd.NoticeIdentity, notice_msg)
+    print(f"[Scene] ChoseIdentity: pid={client.player_id} identity={identity}")
+
+
+def handle_scene_game_kick(client, pb_data):
+    """Handle GameKick - kick a player from the room.
+    ReqGameKick: TargetId(1,uint64)
+    """
+    target_id = 0
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 0:
+                target_id = reader.read_varint()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Broadcast kick to all players
+    broadcast_to_room(client, SceneCmd.GameKick, pb_data, include_self=True)
+    print(f"[Scene] GameKick: kicker={client.player_id} target={target_id}")
+
+
+def handle_scene_watch_login(client, pb_data):
+    """Handle WatchLogin - spectator joins the room."""
+    name = ""
+    key = ""
+    try:
+        reader = PBReader(pb_data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 2:
+                name = reader.read_string()
+            elif field_num == 2 and wire_type == 2:
+                key = reader.read_string()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+
+    client.player_name = name
+    client.player_id = generate_player_id()
+
+    # Send watch login response
+    ret_data = msg.encode_scene_watch_login_ok(ok=True, watcher_id=client.player_id)
+    client.send_scene_message(ModuleType.Scene, SceneCmd.WatchLogin, ret_data)
+    print(f"[Scene] WatchLogin OK: watcher={client.player_id} name={name}")
 
 
 def start_scene_server():
