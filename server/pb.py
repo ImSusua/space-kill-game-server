@@ -109,6 +109,24 @@ class PBReader:
     def read_string(self):
         return self.read_bytes().decode('utf-8', errors='replace')
 
+    def read_float(self):
+        """Read a 32-bit float (wire type 5)."""
+        result = struct.unpack_from('<f', self.data, self.offset)[0]
+        self.offset += 4
+        return result
+
+    def read_fixed32(self):
+        """Read a 32-bit fixed unsigned integer (wire type 5)."""
+        result = struct.unpack_from('<I', self.data, self.offset)[0]
+        self.offset += 4
+        return result
+
+    def read_fixed64(self):
+        """Read a 64-bit fixed unsigned integer (wire type 1)."""
+        result = struct.unpack_from('<Q', self.data, self.offset)[0]
+        self.offset += 8
+        return result
+
     def read_message(self):
         data = self.read_bytes()
         return PBReader(data, 0, len(data))
@@ -175,6 +193,16 @@ class PBWriter:
             self.write_tag(field_number, 2)
             self.write_varint(len(packed))
             self.buf.write(packed)
+
+    def write_float_field(self, field_number, value):
+        """Write a float field (wire type 5)."""
+        self.write_tag(field_number, 5)
+        self.buf.write(struct.pack('<f', value))
+
+    def write_fixed32_field(self, field_number, value):
+        """Write a fixed32 field (wire type 5)."""
+        self.write_tag(field_number, 5)
+        self.buf.write(struct.pack('<I', value))
 
     def get_bytes(self):
         return self.buf.getvalue()

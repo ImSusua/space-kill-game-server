@@ -357,6 +357,33 @@ def encode_ret_id_card_verify():
 
 # ============== Scene Server Messages ==============
 
+def encode_msg_vector(x=0.0, y=0.0):
+    """MsgVector: X(1,float), Y(2,float)"""
+    w = PBWriter()
+    w.write_float_field(1, x)
+    w.write_float_field(2, y)
+    return w.get_bytes()
+
+
+def decode_msg_vector(data):
+    """Decode a MsgVector from raw bytes. Returns (x, y)."""
+    from pb import PBReader
+    x, y = 0.0, 0.0
+    try:
+        reader = PBReader(data)
+        while reader.has_more():
+            field_num, wire_type = reader.read_tag()
+            if field_num == 1 and wire_type == 5:  # X (float)
+                x = reader.read_float()
+            elif field_num == 2 and wire_type == 5:  # Y (float)
+                y = reader.read_float()
+            else:
+                reader.skip_field(wire_type)
+    except:
+        pass
+    return x, y
+
+
 def encode_msg_player_info(player_id, name, x=0, y=0, z=0, color_id=1, state=0):
     """MsgPlayerInfo for scene"""
     w = PBWriter()

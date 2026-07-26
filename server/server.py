@@ -504,6 +504,18 @@ def handle_gate_client(client):
 
 def handle_rpc_message(client, module, cmd, sid, pb_data):
     """Handle an RPC message from the client."""
+    try:
+        _handle_rpc_message_impl(client, module, cmd, sid, pb_data)
+    except Exception as e:
+        print(f"[Gate] RPC handler error (module={module} cmd={cmd}): {e}")
+        try:
+            client.send_rpc_response(sid, b'')
+        except:
+            pass
+
+
+def _handle_rpc_message_impl(client, module, cmd, sid, pb_data):
+    """Internal RPC message handler."""
 
     # Gate service commands
     if module == ModuleType.GateService:
@@ -930,46 +942,157 @@ def handle_scene_client(client):
 
 def handle_scene_message(client, module, cmd, pb_data):
     """Handle a scene message from the client."""
-
-    if cmd == SceneCmd.Login:
-        handle_scene_login(client, pb_data)
-    elif cmd == SceneCmd.HeartBeat:
-        client.send_scene_message(module, SceneCmd.HeartBeat, msg.encode_scene_heartbeat())
-    elif cmd == SceneCmd.Move:
-        handle_scene_move(client, pb_data)
-    elif cmd == SceneCmd.BatchMove:
-        handle_scene_batch_move(client, pb_data)
-    elif cmd == SceneCmd.Action:
-        pass  # Ignore action for now
-    elif cmd == SceneCmd.ChangeState:
-        handle_scene_change_state(client, pb_data)
-    elif cmd == SceneCmd.Operate:
-        pass
-    elif cmd == SceneCmd.GameOprate:
-        pass
-    elif cmd == SceneCmd.GetRoomSetting:
-        client.send_scene_message(module, SceneCmd.RoomSetting, b'')
-    elif cmd == SceneCmd.RoomChat:
-        handle_scene_chat(client, pb_data)
-    elif cmd == SceneCmd.SendEmoji:
-        pass
-    elif cmd == SceneCmd.Trigger:
-        pass
-    elif cmd == SceneCmd.ChangeColor:
-        handle_scene_change_color(client, pb_data)
-    elif cmd == SceneCmd.ReportHangUp:
-        pass
-    elif cmd == SceneCmd.ReportSpeak:
-        pass
-    elif cmd == SceneCmd.SyncAction:
-        pass
-    elif cmd == SceneCmd.SyncMove:
-        pass
-    elif cmd == SceneCmd.MoveObject:
-        pass
-    else:
-        # Silently ignore unhandled commands
-        pass
+    try:
+        if cmd == SceneCmd.Login:
+            handle_scene_login(client, pb_data)
+        elif cmd == SceneCmd.HeartBeat:
+            client.send_scene_message(module, SceneCmd.HeartBeat, msg.encode_scene_heartbeat())
+        elif cmd == SceneCmd.Move:
+            handle_scene_move(client, pb_data)
+        elif cmd == SceneCmd.BatchMove:
+            handle_scene_batch_move(client, pb_data)
+        elif cmd == SceneCmd.Action:
+            # Action - no response needed, just broadcast if needed
+            pass
+        elif cmd == SceneCmd.ChangeState:
+            handle_scene_change_state(client, pb_data)
+        elif cmd == SceneCmd.Operate:
+            # Operate - send empty response
+            client.send_scene_message(module, SceneCmd.Operate, b'')
+        elif cmd == SceneCmd.GameOprate:
+            # GameOprate - send empty response
+            client.send_scene_message(module, SceneCmd.GameOprate, b'')
+        elif cmd == SceneCmd.GetRoomSetting:
+            # Return empty room setting
+            client.send_scene_message(module, SceneCmd.RoomSetting, b'')
+        elif cmd == SceneCmd.RoomChat:
+            handle_scene_chat(client, pb_data)
+        elif cmd == SceneCmd.SendEmoji:
+            # Broadcast emoji to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.SendEmoji, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        elif cmd == SceneCmd.Trigger:
+            # Broadcast trigger to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.Trigger, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        elif cmd == SceneCmd.ChangeColor:
+            handle_scene_change_color(client, pb_data)
+        elif cmd == SceneCmd.ReportHangUp:
+            pass
+        elif cmd == SceneCmd.ReportSpeak:
+            pass
+        elif cmd == SceneCmd.SyncAction:
+            # Broadcast sync action to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.SyncAction, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        elif cmd == SceneCmd.SyncMove:
+            # Broadcast sync move to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.SyncMove, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        elif cmd == SceneCmd.MoveObject:
+            # Broadcast move object to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.MoveObject, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        elif cmd == SceneCmd.SpaceStart:
+            # Game start - broadcast to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        try:
+                            other_client.send_scene_message(ModuleType.Scene, SceneCmd.SpaceStart, pb_data)
+                        except:
+                            pass
+            except:
+                pass
+        elif cmd == SceneCmd.SpaceEnd:
+            # Game end - broadcast to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        try:
+                            other_client.send_scene_message(ModuleType.Scene, SceneCmd.SpaceEnd, pb_data)
+                        except:
+                            pass
+            except:
+                pass
+        elif cmd == SceneCmd.RoomBroadcast:
+            # Broadcast to all players in room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.RoomBroadcast, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        elif cmd == SceneCmd.BatchTrigger:
+            # Broadcast batch trigger to room
+            try:
+                room = scene_rooms.get(client.room_id)
+                if room:
+                    for pid, other_client in room['players'].items():
+                        if pid != client.player_id:
+                            try:
+                                other_client.send_scene_message(ModuleType.Scene, SceneCmd.BatchTrigger, pb_data)
+                            except:
+                                pass
+            except:
+                pass
+        else:
+            # Silently ignore unhandled commands
+            pass
+    except Exception as e:
+        print(f"[Scene] Message handler error (cmd={cmd}): {e}")
 
 
 def handle_scene_login(client, pb_data):
@@ -1062,41 +1185,69 @@ def handle_scene_login(client, pb_data):
 
 
 def handle_scene_move(client, pb_data):
-    """Handle player movement."""
+    """Handle player movement.
+    
+    Client sends ReqMove with:
+    - Field 1: Pos (MsgVector sub-message with X, Y as float)
+    - Field 2: Rotation (MsgVector sub-message with X, Y as float)
+    - Field 3: Frame (uint32)
+    """
     try:
         reader = PBReader(pb_data)
         while reader.has_more():
             field_num, wire_type = reader.read_tag()
-            if field_num == 1 and wire_type == 0:
-                client.x = reader.read_varint() / 1000.0
-            elif field_num == 2 and wire_type == 0:
-                client.y = reader.read_varint() / 1000.0
-            elif field_num == 3 and wire_type == 0:
-                client.z = reader.read_varint() / 1000.0
+            if field_num == 1 and wire_type == 2:  # Pos (MsgVector)
+                vec_data = reader.read_bytes()
+                x, y = msg.decode_msg_vector(vec_data)
+                client.x = x
+                client.y = y
+            elif field_num == 2 and wire_type == 2:  # Rotation (MsgVector)
+                vec_data = reader.read_bytes()
+                rx, ry = msg.decode_msg_vector(vec_data)
+                # Store rotation if needed
+            elif field_num == 3 and wire_type == 0:  # Frame
+                frame = reader.read_varint()
             else:
                 reader.skip_field(wire_type)
-    except:
-        pass
+    except Exception as e:
+        print(f"[Scene] Move parse error: {e}")
 
     # Broadcast to other players
-    room = scene_rooms.get(client.room_id)
-    if room:
-        update_msg = msg.encode_scene_update_player(client.player_id, client.x, client.y, client.z, client.state)
-        for pid, other_client in room['players'].items():
-            if pid != client.player_id:
-                try:
-                    other_client.send_scene_message(ModuleType.Scene, SceneCmd.UpdatePlayer, update_msg)
-                except:
-                    pass
+    try:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            update_msg = msg.encode_scene_update_player(client.player_id, client.x, client.y, client.z, client.state)
+            for pid, other_client in room['players'].items():
+                if pid != client.player_id:
+                    try:
+                        other_client.send_scene_message(ModuleType.Scene, SceneCmd.UpdatePlayer, update_msg)
+                    except:
+                        pass
+    except Exception as e:
+        print(f"[Scene] Move broadcast error: {e}")
 
 
 def handle_scene_batch_move(client, pb_data):
-    """Handle batch movement."""
-    pass
+    """Handle batch movement.
+    
+    Client sends ReqBatchMove with list of positions.
+    Just broadcast to other players.
+    """
+    try:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            for pid, other_client in room['players'].items():
+                if pid != client.player_id:
+                    try:
+                        other_client.send_scene_message(ModuleType.Scene, SceneCmd.BatchUpdatePlayer, pb_data)
+                    except:
+                        pass
+    except Exception as e:
+        print(f"[Scene] BatchMove error: {e}")
 
 
 def handle_scene_change_state(client, pb_data):
-    """Handle state change."""
+    """Handle state change and broadcast to room."""
     try:
         reader = PBReader(pb_data)
         while reader.has_more():
@@ -1105,6 +1256,20 @@ def handle_scene_change_state(client, pb_data):
                 client.state = reader.read_varint()
             else:
                 reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Broadcast state change to other players
+    try:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            update_msg = msg.encode_scene_update_player(client.player_id, client.x, client.y, client.z, client.state)
+            for pid, other_client in room['players'].items():
+                if pid != client.player_id:
+                    try:
+                        other_client.send_scene_message(ModuleType.Scene, SceneCmd.UpdatePlayer, update_msg)
+                    except:
+                        pass
     except:
         pass
 
@@ -1138,7 +1303,7 @@ def handle_scene_chat(client, pb_data):
 
 
 def handle_scene_change_color(client, pb_data):
-    """Handle color change."""
+    """Handle color change and broadcast to room."""
     try:
         reader = PBReader(pb_data)
         while reader.has_more():
@@ -1147,6 +1312,20 @@ def handle_scene_change_color(client, pb_data):
                 client.color_id = reader.read_varint()
             else:
                 reader.skip_field(wire_type)
+    except:
+        pass
+
+    # Broadcast color change to other players
+    try:
+        room = scene_rooms.get(client.room_id)
+        if room:
+            update_msg = msg.encode_scene_update_player(client.player_id, client.x, client.y, client.z, client.state)
+            for pid, other_client in room['players'].items():
+                if pid != client.player_id:
+                    try:
+                        other_client.send_scene_message(ModuleType.Scene, SceneCmd.UpdatePlayer, update_msg)
+                    except:
+                        pass
     except:
         pass
 
