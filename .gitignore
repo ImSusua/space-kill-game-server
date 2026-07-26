@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Large files (cannot push to GitHub)
+*.apk
+*.APK
+*.zip
+
+# Build artifacts
+*.dll
+*.ab
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
