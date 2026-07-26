@@ -15,6 +15,9 @@ from pb import PBReader, decode_varint, encode_varint
 from config import *
 import messages as msg
 
+# Resource directory - where .ab files and config files are served from
+RESOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources')
+
 # Player database (in-memory)
 players = {}
 player_id_counter = 1000000
@@ -89,6 +92,133 @@ def get_or_create_player(device_id, account="", password=""):
 class LoginHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress default logging
+
+    def do_GET(self):
+        """Handle GET requests for resource files."""
+        # Normalize path: collapse multiple slashes
+        raw_path = self.path.split('?')[0]  # Strip query string
+        # Collapse multiple consecutive slashes
+        parts = [p for p in raw_path.split('/') if p]
+        clean_path = '/'.join(parts)
+
+        print(f"[HTTP-GET] path={self.path} -> clean={clean_path}")
+
+        # Try to find the requested file
+        # The path may contain version segments like "res101/android/" - strip known prefixes
+        # Also handle _u_md5 suffix on filenames
+        file_path = self._resolve_resource(clean_path)
+
+        if file_path and os.path.isfile(file_path):
+            try:
+                with open(file_path, 'rb') as f:
+                    data = f.read()
+                self.send_response(200)
+                # Set appropriate content type
+                if clean_path.endswith('.json'):
+                    self.send_header('Content-Type', 'application/json')
+                elif clean_path.endswith('.xml'):
+                    self.send_header('Content-Type', 'application/xml')
+                elif clean_path.endswith('.ab'):
+                    self.send_header('Content-Type', 'application/octet-stream')
+                else:
+                    self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                print(f"[HTTP-GET] Served: {file_path} ({len(data)} bytes)")
+            except Exception as e:
+                print(f"[HTTP-GET] Error serving {file_path}: {e}")
+                self.send_error(500, str(e))
+        else:
+            # If the file is not found, check if it's a known config file
+            # that we can generate on the fly
+
+            # Empty path or all-slashes path: the patched appVerPath_Out URL
+            # had its filename replaced with slashes, so an empty clean_path
+            # means the game is requesting appver_au.xml
+            if clean_path == '' or clean_path.endswith('appver_au.xml'):
+                xml_content = '<?xml version="1.0" encoding="utf-8"?>\n<apps>\n  <item device="android" Channel="official" appver="1.20.18.1" forceUpdate="1.20.18.1" tipUpdate="1.20.18.1" download="http://172.21.26.128:8080" downWord="latest" showCount="1" />\n</apps>'
+                data = xml_content.encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/xml')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                print(f"[HTTP-GET] Served appver_au.xml (path was: '{clean_path}')")
+            elif clean_path.endswith('assetsversion.json'):
+                # Try to read the actual assetsversion.json from resources first
+                ver_file = os.path.join(RESOURCE_DIR, 'assetsversion.json')
+                if os.path.isfile(ver_file):
+                    with open(ver_file, 'rb') as f:
+                        data = f.read()
+                else:
+                    # Fall back to generated version with correct metamd5
+                    version_json = json.dumps({
+                        "ver": 1,
+                        "isauditing": "false",
+                        "metapath": "data/assetsmeta.json",
+                        "metamd5": "8ec24613090ebc1d35a697f4c26d99b3"
+                    })
+                    data = version_json.encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                print(f"[HTTP-GET] Served assetsversion.json ({len(data)} bytes)")
+            else:
+                print(f"[HTTP-GET] File not found: {clean_path}")
+                # Return empty 200 response instead of 404 to prevent client errors
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+    def _resolve_resource(self, clean_path):
+        """Resolve a clean URL path to a local file path.
+        
+        Handles:
+        - Stripping version path prefixes like 'res101/android/'
+        - Stripping _u_md5 suffix from filenames
+        - Looking up files in the resources directory
+        """
+        # Strip known path prefixes
+        # Path might be like: "res101/android/assetsversion.json"
+        # or: "res101/android/data/config.ab_u_abc123..."
+        path = clean_path
+
+        # Remove res{N}/android/ prefix if present
+        import re
+        path = re.sub(r'^res\d+/android/', '', path)
+        path = re.sub(r'^res\d+/', '', path)
+        # Also try removing just 'android/' prefix
+        if path.startswith('android/'):
+            path = path[8:]
+
+        # Handle _u_md5 suffix: "data/config.ab_u_abc123..." -> "data/config.ab"
+        # The _u_ separator is used for cache busting
+        if '_u_' in path:
+            # Find the last occurrence of _u_ that's after a file extension
+            # Split on _u_ and take the first part
+            idx = path.rfind('_u_')
+            if idx > 0:
+                # Check if the part before _u_ looks like a file path
+                potential_path = path[:idx]
+                if '.' in potential_path:
+                    path = potential_path
+
+        # Try direct file lookup
+        full_path = os.path.join(RESOURCE_DIR, path)
+        if os.path.isfile(full_path):
+            return full_path
+
+        # Try with 'data/' prefix if not already there
+        if not path.startswith('data/'):
+            alt_path = os.path.join(RESOURCE_DIR, 'data', path)
+            if os.path.isfile(alt_path):
+                return alt_path
+
+        return None
 
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
@@ -241,10 +371,21 @@ class LoginHandler(BaseHTTPRequestHandler):
 
 
 def start_http_server():
-    """Start the HTTP login server."""
+    """Start the HTTP login server on port 8080."""
     server = HTTPServer(('0.0.0.0', HTTP_PORT), LoginHandler)
-    print(f"[HTTP] Login server started on port {HTTP_PORT}")
+    print(f"[HTTP] Login+Resource server started on port {HTTP_PORT}")
     server.serve_forever()
+
+
+def start_http_server_80():
+    """Start a secondary HTTP server on port 80 for domain-level patched URLs."""
+    try:
+        server = HTTPServer(('0.0.0.0', 80), LoginHandler)
+        print(f"[HTTP] Secondary server started on port 80")
+        server.serve_forever()
+    except Exception as e:
+        print(f"[HTTP] Could not start port 80 server: {e}")
+        print(f"[HTTP] (This is OK if not running as root - port 8080 is primary)")
 
 
 # ==================== Gate/RPC TCP Server ====================
@@ -1040,15 +1181,21 @@ def heartbeat_loop():
 def main():
     print("=" * 60)
     print("  Game Server Starting...")
-    print(f"  HTTP:  {SERVER_IP}:{HTTP_PORT}")
+    print(f"  HTTP:  {SERVER_IP}:{HTTP_PORT} (+ port 80 if available)")
     print(f"  Gate:  {SERVER_IP}:{GATE_PORT}")
     print(f"  Scene: {SERVER_IP}:{SCENE_PORT}")
+    print(f"  Resources: {RESOURCE_DIR}")
     print("=" * 60)
 
-    # Start HTTP server in a thread
+    # Start HTTP server on port 8080 in a thread
     http_thread = threading.Thread(target=start_http_server)
     http_thread.daemon = True
     http_thread.start()
+
+    # Start HTTP server on port 80 in a thread (for domain-level patched URLs)
+    http80_thread = threading.Thread(target=start_http_server_80)
+    http80_thread.daemon = True
+    http80_thread.start()
 
     # Start Gate server in a thread
     gate_thread = threading.Thread(target=start_gate_server)

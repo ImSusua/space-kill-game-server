@@ -125,7 +125,24 @@ SERVER_IP = "172.21.26.128"
 
 ## APK 配置
 
-APK 中的 `Assembly-CSharp.dll` 已修补，将以下服务器地址替换为 `172.21.26.128`：
+### 离线版 APK（资源内置）
+
+离线版 APK (`嘿嘿太空杀-offline.apk`) 通过 IL 级别补丁修改了 `Assembly-CSharp-firstpass.dll` 中的 `CheckWebVersionConfig()` 方法，使游戏直接从安装包内置资源加载，无需从 CDN 下载资源。
+
+**补丁原理：**
+- 原始流程：从 CDN 下载 `assetsversion.json` → 下载资源包 → 失败则提示"资源准备超时"
+- 修补后流程：从本地读取版本配置 → 解析元数据 → 直接进入游戏
+
+**APK 内容：**
+- 468 个资源文件（.ab 包）打包在 `assets/android/` 目录
+- `assetsversion.json` 和 `assetsmeta.json` 元数据文件
+- 修补后的 `Assembly-CSharp.dll` 和 `Assembly-CSharp-firstpass.dll`（服务器地址指向 172.21.26.128）
+
+**注意：** 这是一个联机游戏，资源离线加载只是省去了 CDN 下载步骤。游戏的登录、房间匹配、场景同步等核心联机功能仍然需要后端服务器运行。
+
+### 服务器地址修补
+
+APK 中的 DLL 已修补，将以下服务器地址替换为 `172.21.26.128`：
 
 | 原始地址 | 替换地址 |
 |---------|---------|
@@ -134,6 +151,8 @@ APK 中的 `Assembly-CSharp.dll` 已修补，将以下服务器地址替换为 `
 | `http://upload.90992.cn` | `http://172.21.26.128:8080` |
 | `http://image.90992.cn` | `http://172.21.26.128:8080` |
 | `http://report.90992.cn` | `http://172.21.26.128:8080` |
+| `http://testver.helpyun.top/qqpd/res` | `http://172.21.26.128:8080` |
+| `http://skyver.helpyun.top/res` | `http://172.21.26.128:8080` |
 
 ## 测试
 

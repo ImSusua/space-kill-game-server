@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<apps>
+  <item device="android" Channel="official" appver="1.20.18.1" forceUpdate="1.20.18.1" tipUpdate="1.20.18.1" download="http://172.21.26.128:8080" downWord="最新版本" showCount="1" />
+</apps>
