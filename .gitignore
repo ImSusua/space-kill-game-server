@@ -3,12 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Large files (cannot push to GitHub)
-*.apk
-*.APK
+# Build artifacts (not needed in repo)
 *.zip
-
-# Build artifacts
 *.dll
 *.ab
 
