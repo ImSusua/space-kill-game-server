@@ -157,7 +157,7 @@ class LoginHandler(BaseHTTPRequestHandler):
                         "ver": 1,
                         "isauditing": "false",
                         "metapath": "data/assetsmeta.json",
-                        "metamd5": "8ec24613090ebc1d35a697f4c26d99b3"
+                        "metamd5": "ded92599e5ce6918ca4bc67779794717"
                     })
                     data = version_json.encode('utf-8')
                 self.send_response(200)
