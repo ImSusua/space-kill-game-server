@@ -1,18 +1,15 @@
 #!/bin/bash
 # Game Server Startup Script
-# Usage:
-#   ./start.sh          - Start in test mode (127.0.0.1)
-#   ./start.sh prod     - Start in production mode (172.21.26.128)
+# Servers bind to 0.0.0.0 and always return 172.21.26.128 to clients.
 
 cd "$(dirname "$0")"
 export PYTHONPATH="$(pwd)"
 
-if [ "$1" = "prod" ]; then
-    export SERVER_MODE=prod
-    echo "Starting server in PRODUCTION mode (IP: 172.21.26.128)"
-else
-    export SERVER_MODE=test
-    echo "Starting server in TEST mode (IP: 127.0.0.1)"
-fi
+echo "Starting game server..."
+echo "  HTTP:  0.0.0.0:8080  (login + resources)"
+echo "  Gate:  0.0.0.0:8100  (RPC communication)"
+echo "  Scene: 0.0.0.0:8200  (scene sync)"
+echo "  Client IP: 172.21.26.128"
+echo ""
 
 python3 server.py

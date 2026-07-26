@@ -21,18 +21,17 @@ APK_IP = "172.21.26.128"
 # For testing, use local IP
 LOCAL_IP = get_local_ip()
 
-# Server mode: set USE_PROD=True for production (APK_IP), False for local testing
-# Production: server binds to APK_IP (172.21.26.128) - matches the patched APK
-# Testing:   server binds to 127.0.0.1 - for local self-test
-USE_PROD = os.environ.get('SERVER_MODE', 'test').lower() == 'prod'
-SERVER_IP = APK_IP if USE_PROD else "127.0.0.1"
+# Servers always bind to 0.0.0.0 (all interfaces) in server.py.
+# The addresses below are sent TO the APK client, so they must always
+# use the APK_IP that the APK is configured to connect to.
+SERVER_IP = APK_IP  # Always 172.21.26.128 - matches patched APK
 
 # Port configuration
 HTTP_PORT = 8080
 GATE_PORT = 8100
 SCENE_PORT = 8200
 
-# Server addresses
+# Server addresses (sent to APK client in login/startgame responses)
 HTTP_ADDR = f"{SERVER_IP}:{HTTP_PORT}"
 GATE_ADDR = f"{SERVER_IP}:{GATE_PORT}"
 SCENE_ADDR = f"{SERVER_IP}:{SCENE_PORT}"
